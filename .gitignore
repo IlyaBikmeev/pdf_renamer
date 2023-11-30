@@ -1,4 +1,5 @@
-poppler-23.11.0/
-Tesseract-OCR/
+/poppler*/
+Tesseract-OCR*/
 venv/
 .env
+/result/

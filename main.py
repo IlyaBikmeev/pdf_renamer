@@ -4,108 +4,78 @@ from pdf2image import convert_from_path
 import re
 import os
 import shutil
-import fitz
 from PyPDF2 import PdfReader
+import traceback
 import PyPDF2
-from dotenv import dotenv_values, load_dotenv
-
-
+from dotenv import load_dotenv
 
 # Загрузка переменных окружения из файла .env
 load_dotenv('.env')
 poppler_path = os.getenv("poppler_path")
 tesseract_path = os.getenv("tesseract_path")
 log_path = os.getenv("log_path")
-pdf_files = os.getenv("input_directory")
-folder_path = os.getenv("output_directory")
-print(pdf_files,folder_path)
+input_path = os.getenv("input_directory")
+output_path = os.getenv("output_directory")
+pytesseract.pytesseract.tesseract_cmd = tesseract_path
+
+def save_first_page(input_pdf, output_pdf):
+    with open(input_pdf, 'rb') as file:
+        reader = PyPDF2.PdfReader(file)
+        writer = PyPDF2.PdfWriter()
+        writer.add_page(reader.pages[0])
+
+        with open(output_pdf, 'wb') as output_file:
+            writer.write(output_file)
 
 def read_text_from_pdf(file_path):
     with open(file_path, "rb") as file:
         pdf_reader = PdfReader(file)
-        num_pages = len(pdf_reader.pages)
+        return '\n'.join([page.extract_text() for page in pdf_reader.pages[::2]])
 
-        text = ""
-        for page_num in range(num_pages):
-            page = pdf_reader.pages[page_num]
-            text += page.extract_text()
-
-        return text
-
-def find_pdf_files(folder_path):
-    pdf_files = []
-    # для чтения в подкаталогах тоже
-    # for root, dirs, files in os.walk(folder_path):
-    #     for file in files:
-    #         if file.endswith(".pdf"):
-    #             pdf_files.append(os.path.join(root, file))
-    # return pdf_files
-    for file in os.listdir(folder_path):
-        if file.endswith(".pdf"):
-            pdf_files.append(os.path.join(folder_path, file))
-    return pdf_files
-folder_path = os.getenv('input_directory')
-
-
-
-# print("Найденные PDF-файлы:")
-# for file_path in pdf_files:
-#     print(file_path)
-#     get_aku_name(file_path)
-
-#path = "IMG_0001.pdf" #path to a pdf file
 def get_aku_name(path):
-    def remove_first_page(input_pdf, output_pdf):
-        with open(input_pdf, 'rb') as file:
-            reader = PyPDF2.PdfReader(file)
-            writer = PyPDF2.PdfWriter()
+    save_first_page(path, 'buf.pdf')
+    images = convert_from_path("buf.pdf", 500, poppler_path=poppler_path)
+    os.remove('buf.pdf')
+    pattern_1 = r"AKU[.,\s]\S{4}[.,\s]\S{2}\S{3}[.,\s]\S{1,3}[.,\s]RK[.,\s]\S{1,6}"
+    pattern_2 = r"[,\s]"
 
-            for page_num in range(0,1):
-                page = reader.pages[page_num]
-                writer.add_page(page)
+    text = read_text_from_pdf(path)
+    match_1 = re.findall(pattern_1, text)
+    match_2 = re.findall(pattern_1,pytesseract.image_to_string(images[0], lang='eng'))
+    
 
-            with open(output_pdf, 'wb') as output_file:
-                writer.write(output_file)
+    if not match_1 and not match_2:
+        print(f'Не получилось достать код для файла {path} :(')
+        raise ValueError("Doesn't match any regexp")
 
-
-        
-    remove_first_page(path,"output.pdf")
-    images = convert_from_path("output.pdf", 500, poppler_path='poppler-23.11.0/Library/bin/')
-    pattern = r"AKU[.,\s]\S{4}[.,\s]\S{2}\S{3}[.,\s]\S{1,3}[.,\s]RK[.,\s]\S{1,6}"
-    pattern2 = r"[,\s]"
-        
-    pytesseract.pytesseract.tesseract_cmd = r"Tesseract-OCR/tesseract.exe"
-
-    match = re.findall(pattern,pytesseract.image_to_string(images[0], lang='eng'))
-    print(match)
-    if match:
-        print(f"Код '{match[0]}' соответствует формату.")
-        replaced_text = re.sub(pattern2, ".", match[0])
-        print(replaced_text)
-        return replaced_text
+    if match_1:
+        print('Найдено совпадение в тексте.')
+        return re.sub(pattern_2, ".", match_1[0])
     else:
-        match = re.findall(pattern,read_text_from_pdf(path))
-        if match:
-            print(f"Код '{match[0]}' соответствует формату.")
-            replaced_text = re.sub(pattern2, ".", match[0])
-            print(replaced_text)
-            return replaced_text
-        else:
-            print(f"Код  не соответствует формату.")
-            return "unknown"
-        
-if not os.path.exists(folder_path):
-        os.mkdir(folder_path)
-def save_file_with_new_name(file_path, new_file_path):
-    shutil.copyfile(file_path, new_file_path)
+        print('Найдено совпадение в картинке.')
+        return re.sub(pattern_2, ".", match_2[0])
 
-print("PDF-файлы:")
+if not os.path.exists(output_path):
+    os.mkdir(output_path)
+
 num = 1
-for file_path in pdf_files: 
-    print(file_path)
-    buf = get_aku_name(file_path) 
-    buf = str(num)+"_"+buf+".pdf"
-    new_file_path = os.path.join(folder_path , buf)
-    save_file_with_new_name(file_path, new_file_path )
-    print("Файл сохранен под новым именем:", buf)
-    num+=1
+success = 0
+failed = 0
+for file in os.listdir(input_path):
+    if file.endswith('.pdf'):
+        try:
+            path = f'{input_path}/{file}'
+            aku_name = get_aku_name(path)
+            print('Идентификатор для файла: ' + aku_name)
+            new_path = f'{output_path}/{num}_{aku_name}.pdf'
+            shutil.copyfile(path, new_path)
+            num += 1
+            success += 1
+
+            print('Успешно обработан файл ' + file)
+        except Exception as e:
+            failed += 1
+            print(f'Не получилось обработать файл {file}. Ошибка: {e}.')
+            print(traceback.print_exc())
+
+print(f'Успешно обработано файлов: {success} из {success + failed}. Ошибок: {failed}')
